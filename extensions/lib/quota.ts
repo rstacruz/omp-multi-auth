@@ -1,8 +1,12 @@
 // ========================================================================
 // Built-in quota checking
 // ========================================================================
+import { readFileSync } from "fs";
+import { randomUUID } from "crypto";
+import { homedir } from "os";
+import { dirname, join } from "path";
 import type { ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { BorderedLoader } from "@oh-my-pi/pi-coding-agent";
+import { BorderedLoader, getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { getBaseProvider, subDisplayName, PROVIDER_TEMPLATES } from "./providers.ts";
 import { getAuthStorage, adaptAuthStorage, getModels, subProviderName, type AuthStorageEntry, type MultiAuthConfig, type QuotaAccount, type QuotaCheckResult, type QuotaStatusKind, type ProviderQuotaChecker, type AuthStorage } from "./core.ts";
@@ -32,6 +36,8 @@ export const GOOGLE_ANTIGRAVITY_HEADERS = {
 export const GOOGLE_ANTIGRAVITY_HIDDEN_MODELS = new Set(["tab_flash_lite_preview"]);
 export const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
 export const OPENAI_PROFILE_CLAIM = "https://api.openai.com/profile";
+export const OPENCODE_GO_USAGE_BASE_URL = "https://opencode.ai/inference/go";
+export const OPENCODE_GO_USAGE_PATH = "/v1/usage";
 
 export interface CodexUsageWindow {
 	usedPercent: number;
@@ -44,6 +50,19 @@ export interface CodexUsageSnapshot {
 	email: string;
 	fiveHour?: CodexUsageWindow;
 	weekly?: CodexUsageWindow;
+}
+
+export interface OpenCodeUsageWindow {
+	status: "ok" | "rate-limited";
+	/** Percent already consumed; every UI surface shows the remainder. */
+	usedPercent: number;
+	resetAt?: number;
+}
+
+export interface OpenCodeUsageSnapshot {
+	rolling?: OpenCodeUsageWindow;
+	weekly?: OpenCodeUsageWindow;
+	monthly?: OpenCodeUsageWindow;
 }
 
 export interface GoogleGeminiQuotaResponse {
@@ -215,21 +234,174 @@ export async function readResponseError(response: Response): Promise<string> {
 	return `HTTP ${response.status}: ${raw}`;
 }
 
-export function classifyCodexQuotaKind(snapshot: CodexUsageSnapshot): {
+export function missingAuthQuotaResult(account: QuotaAccount): QuotaCheckResult {
+	return {
+		account,
+		kind: "missing-auth",
+		summary: "not logged in",
+		details: [
+			`account: ${account.displayName}`,
+			`provider: ${account.providerName}`,
+			"status: not logged in",
+			"login: use /multi-auth login or /login to authenticate this account",
+		],
+		score: 0,
+	};
+}
+
+export function errorQuotaResult(account: QuotaAccount, message: string): QuotaCheckResult {
+	return {
+		account,
+		kind: "error",
+		summary: message,
+		details: [
+			`account: ${account.displayName}`,
+			`provider: ${account.providerName}`,
+			"status: error",
+			`details: ${message}`,
+		],
+		score: 0,
+	};
+}
+
+export interface QuotaClassification {
 	kind: QuotaStatusKind;
 	score: number;
-} {
-	const fiveHourLeft = getCodexWindowRemaining(snapshot.fiveHour);
-	const weeklyLeft = getCodexWindowRemaining(snapshot.weekly);
-	const values = [fiveHourLeft, weeklyLeft].filter((value): value is number => value !== undefined);
-	if (values.length === 0) {
-		return { kind: "error", score: 0 };
-	}
+}
+
+export function classifyQuotaKind(values: number[], rateLimited = false): QuotaClassification {
+	if (values.length === 0) return { kind: "error", score: 0 };
 	const bottleneck = Math.min(...values);
-	if (bottleneck <= 5) return { kind: "blocked", score: bottleneck };
+	if (rateLimited || bottleneck <= 5) return { kind: "blocked", score: bottleneck };
 	if (bottleneck <= 15) return { kind: "low", score: bottleneck };
 	if (bottleneck <= 30) return { kind: "watch", score: bottleneck };
 	return { kind: "ready", score: bottleneck };
+}
+
+export function classifyCodexQuotaKind(snapshot: CodexUsageSnapshot): QuotaClassification {
+	const fiveHourLeft = getCodexWindowRemaining(snapshot.fiveHour);
+	const weeklyLeft = getCodexWindowRemaining(snapshot.weekly);
+	const values = [fiveHourLeft, weeklyLeft].filter((value): value is number => value !== undefined);
+	return classifyQuotaKind(values);
+}
+
+export type OpenCodeWindowKey = "rolling" | "weekly" | "monthly";
+
+export interface OpenCodeUsageWindowResponse {
+	status?: string;
+	/** JSON may carry a number or a numeric string; both are coerced. */
+	percent?: number | string;
+	resetsAt?: string;
+}
+
+export interface OpenCodeUsageResponse {
+	usage?: Partial<Record<OpenCodeWindowKey, OpenCodeUsageWindowResponse>>;
+}
+
+interface OpenCodeWindowDescriptor {
+	key: OpenCodeWindowKey;
+	label: string;
+	name: string;
+	anchor?: string;
+}
+
+export interface OpenCodeWindowEntry {
+	label: string;
+	name: string;
+	anchor?: string;
+	window: OpenCodeUsageWindow;
+	remaining: number;
+}
+
+/** Window order drives parsing, summaries, details, and the status line. */
+const OPENCODE_GO_WINDOWS: ReadonlyArray<OpenCodeWindowDescriptor> = [
+	{ key: "rolling", label: "5h", name: "5-hour" },
+	{ key: "weekly", label: "7d", name: "7-day" },
+	{ key: "monthly", label: "mo", name: "monthly", anchor: "anniversary anchor" },
+];
+
+const OPENCODE_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+let openCodeSessionId: string | undefined;
+
+/** Install id sent as `x-opencode-session`; falls back to a per-process UUID. */
+export function getOpenCodeSessionId(): string {
+	if (openCodeSessionId) return openCodeSessionId;
+	for (const path of [
+		join(dirname(getAgentDir()), "install-id"),
+		join(homedir(), process.env.PI_CONFIG_DIR ?? ".omp", "install-id"),
+	]) {
+		try {
+			const id = readFileSync(path, "utf8").trim();
+			if (OPENCODE_SESSION_ID_RE.test(id)) return (openCodeSessionId = id);
+		} catch {
+			// try the next candidate
+		}
+	}
+	return (openCodeSessionId = randomUUID());
+}
+
+export function parseOpenCodeUsageWindow(raw: OpenCodeUsageWindowResponse | undefined): OpenCodeUsageWindow | undefined {
+	if (!raw) return undefined;
+	const rateLimited = raw.status === "rate-limited";
+	if (!rateLimited && raw.status !== "ok") return undefined;
+	const text = raw.percent == null ? "" : String(raw.percent).trim();
+	const percent = text === "" ? (rateLimited ? 100 : undefined) : Number(text);
+	if (percent === undefined || !Number.isFinite(percent)) return undefined;
+	return {
+		status: rateLimited ? "rate-limited" : "ok",
+		usedPercent: Math.max(0, Math.min(100, percent)),
+		resetAt: parseIsoTimestampSeconds(raw.resetsAt),
+	};
+}
+
+export function parseOpenCodeUsageSnapshot(data: OpenCodeUsageResponse | undefined): OpenCodeUsageSnapshot {
+	const snapshot: OpenCodeUsageSnapshot = {};
+	for (const descriptor of OPENCODE_GO_WINDOWS) {
+		const window = parseOpenCodeUsageWindow(data?.usage?.[descriptor.key]);
+		if (window) snapshot[descriptor.key] = window;
+	}
+	return snapshot;
+}
+
+export function listOpenCodeWindows(snapshot: OpenCodeUsageSnapshot): OpenCodeWindowEntry[] {
+	const entries: OpenCodeWindowEntry[] = [];
+	for (const { key, ...display } of OPENCODE_GO_WINDOWS) {
+		const window = snapshot[key];
+		if (!window) continue;
+		const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
+		entries.push({ ...display, window, remaining });
+	}
+	return entries;
+}
+
+export function classifyOpenCodeQuotaKind(snapshot: OpenCodeUsageSnapshot): QuotaClassification {
+	const windows = listOpenCodeWindows(snapshot);
+	return classifyQuotaKind(
+		windows.map((entry) => entry.remaining),
+		windows.some((entry) => entry.window.status === "rate-limited"),
+	);
+}
+
+export function formatOpenCodeQuotaDetails(
+	account: QuotaAccount,
+	snapshot: OpenCodeUsageSnapshot,
+	kind: QuotaStatusKind,
+): string[] {
+	const details = [
+		`account: ${account.displayName}`,
+		`provider: ${account.providerName}`,
+		`status: ${formatQuotaKind(kind)}`,
+	];
+	for (const entry of listOpenCodeWindows(snapshot)) {
+		const anchor = entry.anchor ? ` (${entry.anchor})` : "";
+		const limited = entry.window.status === "rate-limited" ? " (rate limited)" : "";
+		const reset = formatResetLong(entry.window.resetAt);
+		const remaining = formatRemainingPercent(entry.remaining);
+		details.push(`${entry.name} window: ${remaining} left${limited}, resets ${reset}${anchor}`);
+	}
+	details.push(`endpoint: ${OPENCODE_GO_USAGE_BASE_URL}${OPENCODE_GO_USAGE_PATH}`);
+	return details;
 }
 
 export function formatQuotaKind(kind: QuotaStatusKind): string {
@@ -710,18 +882,10 @@ export function pickWorstQuotaModel(models: GoogleQuotaModelSnapshot[]): GoogleQ
 	return worst;
 }
 
-export function classifyGoogleQuotaKind(snapshot: GoogleQuotaAccountSnapshot): {
-	kind: QuotaStatusKind;
-	score: number;
-} {
+export function classifyGoogleQuotaKind(snapshot: GoogleQuotaAccountSnapshot): QuotaClassification {
 	const bottleneck = snapshot.worstRemainingPercent;
-	if (bottleneck === undefined) {
-		return { kind: "error", score: 0 };
-	}
-	if (bottleneck <= 5) return { kind: "blocked", score: bottleneck };
-	if (bottleneck <= 15) return { kind: "low", score: bottleneck };
-	if (bottleneck <= 30) return { kind: "watch", score: bottleneck };
-	return { kind: "ready", score: bottleneck };
+	if (bottleneck === undefined) return { kind: "error", score: 0 };
+	return classifyQuotaKind([bottleneck]);
 }
 
 export async function resolveGoogleQuotaAccess(
@@ -1026,18 +1190,7 @@ export const codexQuotaChecker: ProviderQuotaChecker = {
 	async check(account: QuotaAccount, authStorage: AuthStorage, signal?: AbortSignal): Promise<QuotaCheckResult> {
 		const auth = account.auth;
 		if (!auth || auth.type !== "oauth" || typeof auth.access !== "string" || auth.access.length === 0) {
-			return {
-				account,
-				kind: "missing-auth",
-				summary: "not logged in",
-				details: [
-					`account: ${account.displayName}`,
-					`provider: ${account.providerName}`,
-					"status: not logged in",
-					"login: use /multi-auth login or /login to authenticate this account",
-				],
-				score: 0,
-			};
+			return missingAuthQuotaResult(account);
 		}
 
 		const tokenMetadata = getCodexTokenMetadata(auth.access);
@@ -1061,19 +1214,7 @@ export const codexQuotaChecker: ProviderQuotaChecker = {
 				signal,
 			});
 			if (!response.ok) {
-				const error = await readResponseError(response);
-				return {
-					account,
-					kind: "error",
-					summary: error,
-					details: [
-						`account: ${account.displayName}`,
-						`provider: ${account.providerName}`,
-						`status: error`,
-						`details: ${error}`,
-					],
-					score: 0,
-				};
+				return errorQuotaResult(account, await readResponseError(response));
 			}
 
 			const snapshot = parseCodexUsageSnapshot(await response.json());
@@ -1114,19 +1255,7 @@ export const codexQuotaChecker: ProviderQuotaChecker = {
 			};
 		} catch (error: unknown) {
 			if (signal?.aborted || isAbortError(error)) throw error;
-			const message = error instanceof Error ? error.message : String(error);
-			return {
-				account,
-				kind: "error",
-				summary: message,
-				details: [
-					`account: ${account.displayName}`,
-					`provider: ${account.providerName}`,
-					"status: error",
-					`details: ${message}`,
-				],
-				score: 0,
-			};
+			return errorQuotaResult(account, error instanceof Error ? error.message : String(error));
 		}
 	},
 };
@@ -1145,10 +1274,60 @@ export const googleAntigravityQuotaChecker: ProviderQuotaChecker = {
 	},
 };
 
+export const opencodeGoQuotaChecker: ProviderQuotaChecker = {
+	baseProvider: "opencode-go",
+	async check(account: QuotaAccount, authStorage: AuthStorage, signal?: AbortSignal): Promise<QuotaCheckResult> {
+		const key = account.auth?.type === "api_key" ? account.auth.key ?? "" : "";
+		if (!key) {
+			return missingAuthQuotaResult(account);
+		}
+
+		const endpoint = `${OPENCODE_GO_USAGE_BASE_URL}${OPENCODE_GO_USAGE_PATH}`;
+
+		try {
+			const response = await fetch(endpoint, {
+				method: "GET",
+				headers: new Headers({
+					Authorization: `Bearer ${key}`,
+					Accept: "application/json",
+					"User-Agent": "omp-multi-auth",
+					"x-opencode-session": getOpenCodeSessionId(),
+				}),
+				signal,
+			});
+			if (!response.ok) {
+				return errorQuotaResult(account, await readResponseError(response));
+			}
+
+			const snapshot = parseOpenCodeUsageSnapshot(await response.json());
+			const classification = classifyOpenCodeQuotaKind(snapshot);
+			if (classification.kind === "error") {
+				return errorQuotaResult(account, "OpenCode Go usage response contained no quota windows");
+			}
+			const summary = [
+				...listOpenCodeWindows(snapshot).map((entry) => `${entry.label} ${formatRemainingPercent(entry.remaining)}`),
+				formatQuotaKind(classification.kind),
+			].join(" | ");
+			return {
+				account,
+				kind: classification.kind,
+				summary,
+				details: formatOpenCodeQuotaDetails(account, snapshot, classification.kind),
+				score: classification.score,
+				opencodeSnapshot: snapshot,
+			};
+		} catch (error: unknown) {
+			if (signal?.aborted || isAbortError(error)) throw error;
+			return errorQuotaResult(account, error instanceof Error ? error.message : String(error));
+		}
+	},
+};
+
 export const PROVIDER_QUOTA_CHECKERS: ProviderQuotaChecker[] = [
 	codexQuotaChecker,
 	googleGeminiCliQuotaChecker,
 	googleAntigravityQuotaChecker,
+	opencodeGoQuotaChecker,
 ];
 
 export async function showQuotaDetails(
@@ -1249,6 +1428,19 @@ export function formatCurrentModelQuota(
 
 		if (windowLabel === undefined || remaining === undefined) return undefined;
 		return `${windowLabel} ${formatRemainingPercent(remaining)} ${formatResetShort(resetAt)}`;
+	}
+
+	if (result.opencodeSnapshot) {
+		const windows = listOpenCodeWindows(result.opencodeSnapshot);
+		const limited = windows.filter((entry) => entry.window.status === "rate-limited");
+		const worst = (limited.length > 0 ? limited : windows).reduce<OpenCodeWindowEntry | undefined>(
+			(acc, entry) => (!acc || entry.remaining < acc.remaining ? entry : acc),
+			undefined,
+		);
+		if (!worst) return undefined;
+		const suffix = worst.window.status === "rate-limited" ? " limited" : "";
+		const reset = formatResetShort(worst.window.resetAt);
+		return `${worst.label} ${formatRemainingPercent(worst.remaining)} ${reset}${suffix}`;
 	}
 
 	return undefined;

@@ -2,7 +2,7 @@
 import type { ExtensionCommandContext, ExtensionContext, AuthStorage as HostAuthStorage } from "@oh-my-pi/pi-coding-agent";
 import { getBundledModels, type GeneratedProvider } from "@oh-my-pi/pi-catalog";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import type { GoogleQuotaAccountSnapshot, CodexUsageSnapshot } from "./quota.ts";
+import type { GoogleQuotaAccountSnapshot, CodexUsageSnapshot, OpenCodeUsageSnapshot } from "./quota.ts";
 
 export function getModels(providerId: string): Model<Api>[] {
 	return getBundledModels(providerId as GeneratedProvider) as Model<Api>[];
@@ -13,6 +13,7 @@ export type QuotaStatusKind = "ready" | "watch" | "low" | "blocked" | "error" | 
 export interface AuthStorageEntry {
 	type?: string;
 	access?: string;
+	key?: string;
 	refresh?: string;
 	expires?: number;
 	accountId?: string;
@@ -183,6 +184,7 @@ export interface QuotaCheckResult {
 	score: number;
 	googleSnapshot?: GoogleQuotaAccountSnapshot;
 	codexSnapshot?: CodexUsageSnapshot;
+	opencodeSnapshot?: OpenCodeUsageSnapshot;
 }
 
 export interface ProviderQuotaChecker {
