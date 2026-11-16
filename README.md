@@ -107,7 +107,7 @@ For `cursor`, `/multi-auth login` prompts for a dashboard API key (`crsr_...`/`c
 
 ## Built-in quotas
 
-Run `/multi-auth limits` to inspect quota and usage information for supported providers. This currently includes built-in quota checks for Codex and Google providers. Results depend on provider availability and authenticated account state.
+Run `/multi-auth limits` to inspect quota and usage information for supported providers. This currently includes built-in quota checks for Codex, Google, and OpenCode Go providers. OpenCode Go reports rolling (5h), weekly, and monthly windows; the monthly window resets on the subscription anniversary. Results depend on provider availability and authenticated account state.
 
 ## Configuration files
 
