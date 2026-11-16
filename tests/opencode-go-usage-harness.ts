@@ -26,6 +26,12 @@ const MALFORMED = {
 	},
 };
 
+const RATE_LIMITED = {
+	usage: { weekly: { status: "rate-limited", percent: 1, resetsAt: "2026-11-22T00:00:00.000Z" } },
+};
+
+const EMPTY = { usage: {} };
+
 const account = {
 	providerName: "opencode-go-1",
 	baseProvider: "opencode-go",
@@ -39,6 +45,7 @@ export default async function () {
 	const responses = [
 		{ status: 200, body: FIXTURE },
 		{ status: 401, body: { error: { message: "invalid key" } } },
+		{ status: 200, body: EMPTY },
 	];
 	const requests = [];
 	globalThis.fetch = async (input, init) => {
@@ -57,6 +64,7 @@ export default async function () {
 	const ok = await opencodeGoQuotaChecker.check(account, {} as never);
 	const statusLine = ok && formatCurrentModelQuota(ok, model);
 	const denied = await opencodeGoQuotaChecker.check(account, {} as never);
+	const empty = await opencodeGoQuotaChecker.check(account, {} as never);
 	const missing = await opencodeGoQuotaChecker.check({ ...account, auth: undefined }, {} as never);
 
 	writeFileSync(
@@ -65,11 +73,13 @@ export default async function () {
 			requests,
 			snapshot,
 			malformed: parseOpenCodeUsageSnapshot(MALFORMED),
+			rateLimited: classifyOpenCodeQuotaKind(parseOpenCodeUsageSnapshot(RATE_LIMITED)),
 			classification: classifyOpenCodeQuotaKind(snapshot),
 			windows: listOpenCodeWindows(snapshot),
 			ok,
 			statusLine,
 			denied,
+			empty,
 			missing,
 		}),
 	);

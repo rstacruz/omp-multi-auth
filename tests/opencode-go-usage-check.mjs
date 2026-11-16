@@ -78,9 +78,14 @@ try {
 	assert.equal("monthly" in data.malformed, false);
 	assert.equal(data.malformed.weekly.usedPercent, 54);
 
+	// A rate-limited window blocks even when its percent has room left.
+	assert.deepEqual(data.rateLimited, { kind: "blocked", score: 99 });
+
 	assert.equal(data.denied.kind, "error");
 	assert.equal(data.denied.summary, "Unauthorized - log in again");
 	assert.equal(data.denied.score, 0);
+	assert.equal(data.empty.kind, "error");
+	assert.equal(data.empty.summary, "OpenCode Go usage response contained no quota windows");
 	assert.equal(data.missing.kind, "missing-auth");
 	assert.equal(data.missing.summary, "not logged in");
 
