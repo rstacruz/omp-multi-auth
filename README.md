@@ -96,9 +96,12 @@ Create `.omp/multi-auth.json` in a project to restrict which subscription provid
 | `zai` | Z.AI (GLM) |
 | `minimax` | MiniMax (Global) |
 | `minimax-cn` | MiniMax (China) |
+| `opencode-go` | OpenCode Go (API key `oc_sk_...`) |
 | `cursor` | Cursor (dashboard API key `crsr_...` / `cursor_...` or browser sign-in) |
 
 API-key providers support full multi-account operation. Add an account with `/multi-auth add`, select the provider, then authenticate via `/multi-auth login` (or `/login <name>`) and paste your API key when prompted. Each account stores its own key independently in OMP auth storage.
+
+For `opencode-go`, the prompt expects an OpenCode Go API key (`oc_sk_...`). One key covers the provider's whole catalog, so each account exposes every OpenCode Go model, including its Claude, GPT, Gemini, and Grok routes.
 
 For `cursor`, `/multi-auth login` prompts for a dashboard API key (`crsr_...`/`cursor_...`). Submit a key to use token exchange, or leave it blank to sign in via browser PKCE OAuth. Both methods refresh automatically.
 
