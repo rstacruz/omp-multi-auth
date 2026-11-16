@@ -45,8 +45,12 @@ async function runCapture(model) {
 			`import { writeFileSync } from "node:fs";
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
+  const url = String(input);
+  if (url.includes("/v1/usage")) {
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }
   const headers = Object.fromEntries(new Headers(init?.headers));
-  writeFileSync(process.env.MP_CAPTURE, JSON.stringify({ url: String(input), headers }));
+  writeFileSync(process.env.MP_CAPTURE, JSON.stringify({ url, headers }));
   setTimeout(() => process.exit(0), 25);
   return originalFetch("data:,", { headers: { "content-type": "text/event-stream" } });
 };
