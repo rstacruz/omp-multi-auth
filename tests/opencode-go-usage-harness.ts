@@ -41,6 +41,11 @@ const UNKNOWN_STATUS = {
 	usage: { weekly: { status: "exhausted", percent: 99, resetsAt: "2026-11-22T00:00:00.000Z" } },
 };
 
+// A blank string is not a percent; it must not become 100% headroom.
+const BLANK_PERCENT = {
+	usage: { rolling: { status: "ok", percent: " " } },
+};
+
 const EMPTY = { usage: {} };
 
 const account = {
@@ -89,6 +94,7 @@ export default async function () {
 			snapshot,
 			malformed: parseOpenCodeUsageSnapshot(MALFORMED),
 			unknownStatus: parseOpenCodeUsageSnapshot(UNKNOWN_STATUS),
+			blankPercent: parseOpenCodeUsageSnapshot(BLANK_PERCENT),
 			ok,
 			statusLine: formatCurrentModelQuota(ok, model),
 			denied,

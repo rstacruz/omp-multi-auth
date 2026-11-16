@@ -345,7 +345,8 @@ export function parseOpenCodeUsageWindow(raw: OpenCodeUsageWindowResponse | unde
 	if (!raw) return undefined;
 	const rateLimited = raw.status === "rate-limited";
 	if (!rateLimited && raw.status !== "ok") return undefined;
-	const percent = raw.percent == null ? (rateLimited ? 100 : undefined) : Number(raw.percent);
+	const text = raw.percent == null ? "" : String(raw.percent).trim();
+	const percent = text === "" ? (rateLimited ? 100 : undefined) : Number(text);
 	if (percent === undefined || !Number.isFinite(percent)) return undefined;
 	return {
 		status: rateLimited ? "rate-limited" : "ok",

@@ -88,6 +88,7 @@ try {
 
 	// An unrecognized status drops the window instead of reporting its headroom as healthy.
 	assert.equal("weekly" in data.unknownStatus, false);
+	assert.equal("rolling" in data.blankPercent, false);
 
 	// A rate-limited window blocks even with room left, and it must be the one displayed.
 	assert.equal(data.limited.kind, "blocked");
