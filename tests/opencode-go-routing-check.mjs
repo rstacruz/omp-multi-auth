@@ -45,8 +45,7 @@ async function runCapture(model) {
 			`import { writeFileSync } from "node:fs";
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
-  const raw = init?.headers ?? {};
-  const headers = raw instanceof Headers ? Object.fromEntries(raw.entries()) : raw;
+  const headers = Object.fromEntries(new Headers(init?.headers));
   writeFileSync(process.env.MP_CAPTURE, JSON.stringify({ url: String(input), headers }));
   setTimeout(() => process.exit(0), 25);
   return originalFetch("data:,", { headers: { "content-type": "text/event-stream" } });
@@ -101,8 +100,7 @@ for (const testCase of CASES) {
 	assert.equal(url.origin, ORIGIN, testCase.model);
 	assert.equal(url.pathname, testCase.pathname, testCase.model);
 
-	const headers = {};
-	for (const [name, value] of Object.entries(capture.headers)) headers[name.toLowerCase()] = value;
+	const headers = capture.headers;
 	assert.ok(headers["x-opencode-session"], "x-opencode-session present");
 	if (testCase.bearer) {
 		assert.equal(headers.authorization, `Bearer ${KEY}`, testCase.model);
