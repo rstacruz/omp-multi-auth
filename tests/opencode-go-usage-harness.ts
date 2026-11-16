@@ -1,9 +1,7 @@
 // Harness loaded inside omp: stubs fetch and exercises the OpenCode Go quota checker.
 import { writeFileSync } from "node:fs";
 import {
-	classifyOpenCodeQuotaKind,
 	formatCurrentModelQuota,
-	listOpenCodeWindows,
 	opencodeGoQuotaChecker,
 	parseOpenCodeUsageSnapshot,
 } from "../extensions/lib/quota.ts";
@@ -33,6 +31,11 @@ const RATE_LIMITED = {
 	},
 };
 
+// An exhausted window may arrive without a percent; it must still count as blocked.
+const RATE_LIMITED_NO_PERCENT = {
+	usage: { monthly: { status: "rate-limited", resetsAt: "2026-11-29T10:08:51.000Z" } },
+};
+
 const EMPTY = { usage: {} };
 
 const account = {
@@ -50,6 +53,7 @@ export default async function () {
 		{ status: 401, body: { error: { message: "invalid key" } } },
 		{ status: 200, body: EMPTY },
 		{ status: 200, body: RATE_LIMITED },
+		{ status: 200, body: RATE_LIMITED_NO_PERCENT },
 	];
 	const requests = [];
 	globalThis.fetch = async (input, init) => {
@@ -63,15 +67,15 @@ export default async function () {
 			headers: { "content-type": "application/json" },
 		});
 	};
+	const check = () => opencodeGoQuotaChecker.check(account, {} as never);
 
 	const snapshot = parseOpenCodeUsageSnapshot(FIXTURE);
-	const ok = await opencodeGoQuotaChecker.check(account, {} as never);
-	const statusLine = ok && formatCurrentModelQuota(ok, model);
-	const denied = await opencodeGoQuotaChecker.check(account, {} as never);
-	const empty = await opencodeGoQuotaChecker.check(account, {} as never);
-	const limited = await opencodeGoQuotaChecker.check(account, {} as never);
+	const ok = await check();
+	const denied = await check();
+	const empty = await check();
+	const limited = await check();
+	const limitedNoPercent = await check();
 	const missing = await opencodeGoQuotaChecker.check({ ...account, auth: undefined }, {} as never);
-	const limitedStatusLine = limited && formatCurrentModelQuota(limited, model);
 
 	writeFileSync(
 		process.env.MP_USAGE_OUT ?? "",
@@ -79,15 +83,15 @@ export default async function () {
 			requests,
 			snapshot,
 			malformed: parseOpenCodeUsageSnapshot(MALFORMED),
-			classification: classifyOpenCodeQuotaKind(snapshot),
-			windows: listOpenCodeWindows(snapshot),
 			ok,
-			statusLine,
+			statusLine: formatCurrentModelQuota(ok, model),
 			denied,
 			empty,
 			limited,
-			limitedStatusLine,
+			limitedStatusLine: formatCurrentModelQuota(limited, model),
+			limitedNoPercent,
 			missing,
 		}),
 	);
+	setTimeout(() => process.exit(0), 0);
 }

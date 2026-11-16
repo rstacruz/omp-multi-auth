@@ -30,14 +30,23 @@ try {
 	const stderr = [];
 	child.stderr.on("data", (chunk) => stderr.push(chunk));
 
-	for (let i = 0; i < 300 && !existsSync(outputPath); i++) {
-		await new Promise((resolve) => setTimeout(resolve, 100));
+	let timer;
+	try {
+		const outcome = await Promise.race([
+			childClosed.then(() => "closed"),
+			new Promise((resolve) => {
+				timer = setTimeout(() => resolve("timeout"), 30_000);
+			}),
+		]);
+		assert.equal(outcome, "closed", `usage harness did not exit\nstdout: ${Buffer.concat(stdout).toString()}\nstderr: ${Buffer.concat(stderr).toString()}`);
+	} finally {
+		clearTimeout(timer);
 	}
-	if (!existsSync(outputPath)) {
-		throw new Error(
-			`usage harness produced no output\nstdout: ${Buffer.concat(stdout).toString()}\nstderr: ${Buffer.concat(stderr).toString()}`,
-		);
-	}
+
+	const rawStderr = Buffer.concat(stderr).toString();
+	assert.equal(child.exitCode, 0, rawStderr);
+	assert.doesNotMatch(rawStderr, /Failed to load extension/, rawStderr);
+	assert.equal(existsSync(outputPath), true, `usage harness wrote no output\nstdout: ${Buffer.concat(stdout).toString()}\nstderr: ${rawStderr}`);
 
 	const data = JSON.parse(readFileSync(outputPath, "utf8"));
 
@@ -50,11 +59,6 @@ try {
 
 	// percent is used, so the reported remainder is inverted.
 	assert.equal(data.snapshot.rolling.usedPercent, 6);
-	assert.deepEqual(
-		Object.fromEntries(data.windows.map((window) => [window.key, window.remaining])),
-		{ rolling: 94, weekly: 46, monthly: 14 },
-	);
-	assert.deepEqual(data.classification, { kind: "low", score: 14 });
 
 	assert.equal(data.ok.kind, "low");
 	assert.equal(data.ok.summary, "5h 94% | 7d 46% | mo 14% | low");
@@ -84,6 +88,12 @@ try {
 	assert.match(data.limitedStatusLine, /^mo 99% .* limited$/);
 	const monthlyDetail = data.limited.details.find((detail) => detail.startsWith("monthly window:"));
 	assert.match(monthlyDetail, /^monthly window: 99% left \(rate limited\), resets .+ \(anniversary anchor\)$/);
+
+	// An exhausted window without a percent is fully used, not silently dropped.
+	assert.equal(data.limitedNoPercent.kind, "blocked");
+	assert.equal(data.limitedNoPercent.summary, "mo 0% | blocked");
+	const sparseDetail = data.limitedNoPercent.details.find((detail) => detail.startsWith("monthly window:"));
+	assert.match(sparseDetail, /^monthly window: 0% left \(rate limited\), resets /);
 
 	assert.equal(data.denied.kind, "error");
 	assert.equal(data.denied.summary, "Unauthorized - log in again");
