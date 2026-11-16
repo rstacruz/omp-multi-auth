@@ -36,6 +36,11 @@ const RATE_LIMITED_NO_PERCENT = {
 	usage: { monthly: { status: "rate-limited", resetsAt: "2026-11-29T10:08:51.000Z" } },
 };
 
+// An unrecognized status must drop the window rather than report false headroom.
+const UNKNOWN_STATUS = {
+	usage: { weekly: { status: "exhausted", percent: 99, resetsAt: "2026-11-22T00:00:00.000Z" } },
+};
+
 const EMPTY = { usage: {} };
 
 const account = {
@@ -83,6 +88,7 @@ export default async function () {
 			requests,
 			snapshot,
 			malformed: parseOpenCodeUsageSnapshot(MALFORMED),
+			unknownStatus: parseOpenCodeUsageSnapshot(UNKNOWN_STATUS),
 			ok,
 			statusLine: formatCurrentModelQuota(ok, model),
 			denied,

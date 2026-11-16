@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -7,8 +7,12 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const harness = join(root, "tests", "opencode-go-usage-harness.ts");
-const agentDir = mkdtempSync(join(tmpdir(), "omp-multi-auth-opencode-usage-"));
-const outputPath = join(agentDir, "usage.json");
+const sandbox = mkdtempSync(join(tmpdir(), "omp-multi-auth-opencode-usage-"));
+const agentDir = join(sandbox, "agent");
+const installId = "7d4f1c2e-8a3b-4c5d-9e6f-0a1b2c3d4e5f";
+const outputPath = join(sandbox, "usage.json");
+mkdirSync(agentDir);
+writeFileSync(join(sandbox, "install-id"), `${installId}\n`);
 
 let child;
 let childClosed;
@@ -55,7 +59,7 @@ try {
 	assert.equal(request.headers.authorization, "Bearer oc_sk_test");
 	assert.equal(request.headers.accept, "application/json");
 	assert.equal(request.headers["user-agent"], "omp-multi-auth");
-	assert.match(request.headers["x-opencode-session"], /\S+/);
+	assert.equal(request.headers["x-opencode-session"], installId);
 
 	// percent is used, so the reported remainder is inverted.
 	assert.equal(data.snapshot.rolling.usedPercent, 6);
@@ -82,6 +86,9 @@ try {
 	assert.equal("monthly" in data.malformed, false);
 	assert.equal(data.malformed.weekly.usedPercent, 54);
 
+	// An unrecognized status drops the window instead of reporting its headroom as healthy.
+	assert.equal("weekly" in data.unknownStatus, false);
+
 	// A rate-limited window blocks even with room left, and it must be the one displayed.
 	assert.equal(data.limited.kind, "blocked");
 	assert.equal(data.limited.summary, "7d 60% | mo 99% | blocked");
@@ -107,5 +114,5 @@ try {
 } finally {
 	if (child && child.exitCode === null) child.kill("SIGTERM");
 	if (childClosed) await childClosed;
-	rmSync(agentDir, { recursive: true, force: true });
+	rmSync(sandbox, { recursive: true, force: true });
 }

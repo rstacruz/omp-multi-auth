@@ -289,7 +289,8 @@ export type OpenCodeWindowKey = "rolling" | "weekly" | "monthly";
 
 export interface OpenCodeUsageWindowResponse {
 	status?: string;
-	percent?: number;
+	/** JSON may carry a number or a numeric string; both are coerced. */
+	percent?: number | string;
 	resetsAt?: string;
 }
 
@@ -297,8 +298,14 @@ export interface OpenCodeUsageResponse {
 	usage?: Partial<Record<OpenCodeWindowKey, OpenCodeUsageWindowResponse>>;
 }
 
-export interface OpenCodeWindowEntry {
+interface OpenCodeWindowDescriptor {
 	key: OpenCodeWindowKey;
+	label: string;
+	name: string;
+	anchor?: string;
+}
+
+export interface OpenCodeWindowEntry {
 	label: string;
 	name: string;
 	anchor?: string;
@@ -307,34 +314,37 @@ export interface OpenCodeWindowEntry {
 }
 
 /** Window order drives parsing, summaries, details, and the status line. */
-const OPENCODE_GO_WINDOWS: ReadonlyArray<Omit<OpenCodeWindowEntry, "window" | "remaining">> = [
+const OPENCODE_GO_WINDOWS: ReadonlyArray<OpenCodeWindowDescriptor> = [
 	{ key: "rolling", label: "5h", name: "5-hour" },
 	{ key: "weekly", label: "7d", name: "7-day" },
 	{ key: "monthly", label: "mo", name: "monthly", anchor: "anniversary anchor" },
 ];
 
+const OPENCODE_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 let openCodeSessionId: string | undefined;
 
 /** Install id sent as `x-opencode-session`; falls back to a per-process UUID. */
 export function getOpenCodeSessionId(): string {
+	if (openCodeSessionId) return openCodeSessionId;
 	for (const path of [
 		join(dirname(getAgentDir()), "install-id"),
 		join(homedir(), process.env.PI_CONFIG_DIR ?? ".omp", "install-id"),
 	]) {
 		try {
 			const id = readFileSync(path, "utf8").trim();
-			if (id) return id;
+			if (OPENCODE_SESSION_ID_RE.test(id)) return (openCodeSessionId = id);
 		} catch {
 			// try the next candidate
 		}
 	}
-	openCodeSessionId ??= randomUUID();
-	return openCodeSessionId;
+	return (openCodeSessionId = randomUUID());
 }
 
 export function parseOpenCodeUsageWindow(raw: OpenCodeUsageWindowResponse | undefined): OpenCodeUsageWindow | undefined {
 	if (!raw) return undefined;
 	const rateLimited = raw.status === "rate-limited";
+	if (!rateLimited && raw.status !== "ok") return undefined;
 	const percent = raw.percent == null ? (rateLimited ? 100 : undefined) : Number(raw.percent);
 	if (percent === undefined || !Number.isFinite(percent)) return undefined;
 	return {
@@ -355,11 +365,11 @@ export function parseOpenCodeUsageSnapshot(data: OpenCodeUsageResponse | undefin
 
 export function listOpenCodeWindows(snapshot: OpenCodeUsageSnapshot): OpenCodeWindowEntry[] {
 	const entries: OpenCodeWindowEntry[] = [];
-	for (const descriptor of OPENCODE_GO_WINDOWS) {
-		const window = snapshot[descriptor.key];
+	for (const { key, ...display } of OPENCODE_GO_WINDOWS) {
+		const window = snapshot[key];
 		if (!window) continue;
 		const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
-		entries.push({ ...descriptor, window, remaining });
+		entries.push({ ...display, window, remaining });
 	}
 	return entries;
 }
@@ -871,18 +881,10 @@ export function pickWorstQuotaModel(models: GoogleQuotaModelSnapshot[]): GoogleQ
 	return worst;
 }
 
-export function classifyGoogleQuotaKind(snapshot: GoogleQuotaAccountSnapshot): {
-	kind: QuotaStatusKind;
-	score: number;
-} {
+export function classifyGoogleQuotaKind(snapshot: GoogleQuotaAccountSnapshot): QuotaClassification {
 	const bottleneck = snapshot.worstRemainingPercent;
-	if (bottleneck === undefined) {
-		return { kind: "error", score: 0 };
-	}
-	if (bottleneck <= 5) return { kind: "blocked", score: bottleneck };
-	if (bottleneck <= 15) return { kind: "low", score: bottleneck };
-	if (bottleneck <= 30) return { kind: "watch", score: bottleneck };
-	return { kind: "ready", score: bottleneck };
+	if (bottleneck === undefined) return { kind: "error", score: 0 };
+	return classifyQuotaKind([bottleneck]);
 }
 
 export async function resolveGoogleQuotaAccess(
