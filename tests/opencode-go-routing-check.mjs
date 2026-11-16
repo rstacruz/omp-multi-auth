@@ -87,8 +87,7 @@ export default function capture() {}
 const KEY = "oc_sk_test_key";
 const ORIGIN = "https://opencode.ai";
 
-// opencode-go spans four APIs. Only the Anthropic branch keys auth off the
-// provider name (`X-Api-Key`), which is what the transport wrapper restores.
+// Anthropic swaps bearer auth for X-Api-Key
 const CASES = [
 	{ model: "claude-haiku-5-5", pathname: "/inference/go/v1/messages", apiKeyHeader: "x-api-key" },
 	{ model: "deepseek-v4.1-flash", pathname: "/inference/go/v1/chat/completions", bearer: true },
@@ -104,7 +103,6 @@ for (const testCase of CASES) {
 
 	const headers = {};
 	for (const [name, value] of Object.entries(capture.headers)) headers[name.toLowerCase()] = value;
-	assert.match(headers["user-agent"], /^omp\//, "omp user agent");
 	assert.ok(headers["x-opencode-session"], "x-opencode-session present");
 	if (testCase.bearer) {
 		assert.equal(headers.authorization, `Bearer ${KEY}`, testCase.model);

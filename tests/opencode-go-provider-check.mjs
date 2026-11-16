@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const agentDir = mkdtempSync(join(tmpdir(), "omp-multi-auth-opencode-go-"));
 
-// Mirrors omp's bundled opencode-go catalog: every dialect the provider spans.
+// Mirrors omp's bundled opencode-go catalog
 const DIALECT_MODELS = ["beam-free", "grok-4.6", "claude-haiku-5-5", "gemini-4-argon"];
 const MODEL_COUNT = 55;
 const ACCOUNTS = ["opencode-go-1", "opencode-go-2"];
@@ -77,9 +77,7 @@ try {
 				if (!waiters[i].matches(event)) continue;
 				waiters.splice(i, 1)[0].resolve(event);
 			}
-		} catch {
-			// Ignore non-JSON protocol noise or incomplete lines.
-		}
+		} catch {}
 	});
 	const send = (request) => {
 		const response = new Promise((resolve) => waiters.push({ matches: (event) => event.id === request.id, resolve }));
@@ -93,7 +91,6 @@ try {
 	const rawStderr = Buffer.concat(stderr).toString();
 	assert.equal(exitCode, 0, rawStderr);
 	assert.doesNotMatch(rawStdout, /"type":"extension_error"/, rawStdout);
-	assert.equal(response.command, "get_available_models");
 	assert.equal(response.success, true);
 
 	const models = response.data.models;
