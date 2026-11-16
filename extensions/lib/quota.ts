@@ -366,9 +366,10 @@ export function formatOpenCodeQuotaDetails(
 	];
 	for (const entry of listOpenCodeWindows(snapshot)) {
 		const anchor = entry.key === "monthly" ? " (anniversary anchor)" : "";
+		const limited = entry.window.status === "rate-limited" ? " (rate limited)" : "";
 		const reset = formatResetLong(entry.window.resetAt);
 		const remaining = formatRemainingPercent(entry.remaining);
-		details.push(`${OPENCODE_GO_WINDOW_NAMES[entry.key]} window: ${remaining} left, resets ${reset}${anchor}`);
+		details.push(`${OPENCODE_GO_WINDOW_NAMES[entry.key]} window: ${remaining} left${limited}, resets ${reset}${anchor}`);
 	}
 	details.push(`endpoint: ${OPENCODE_GO_USAGE_BASE_URL}${OPENCODE_GO_USAGE_PATH}`);
 	return details;
@@ -1467,12 +1468,16 @@ export function formatCurrentModelQuota(
 	}
 
 	if (result.opencodeSnapshot) {
-		const worst = listOpenCodeWindows(result.opencodeSnapshot).reduce<OpenCodeWindowEntry | undefined>(
+		const windows = listOpenCodeWindows(result.opencodeSnapshot);
+		const limited = windows.filter((entry) => entry.window.status === "rate-limited");
+		const worst = (limited.length > 0 ? limited : windows).reduce<OpenCodeWindowEntry | undefined>(
 			(acc, entry) => (!acc || entry.remaining < acc.remaining ? entry : acc),
 			undefined,
 		);
 		if (!worst) return undefined;
-		return `${worst.label} ${formatRemainingPercent(worst.remaining)} ${formatResetShort(worst.window.resetAt)}`;
+		const suffix = worst.window.status === "rate-limited" ? " limited" : "";
+		const reset = formatResetShort(worst.window.resetAt);
+		return `${worst.label} ${formatRemainingPercent(worst.remaining)} ${reset}${suffix}`;
 	}
 
 	return undefined;

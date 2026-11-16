@@ -27,7 +27,10 @@ const MALFORMED = {
 };
 
 const RATE_LIMITED = {
-	usage: { weekly: { status: "rate-limited", percent: 1, resetsAt: "2026-11-22T00:00:00.000Z" } },
+	usage: {
+		weekly: { status: "ok", percent: 40, resetsAt: "2026-11-22T00:00:00.000Z" },
+		monthly: { status: "rate-limited", percent: 1, resetsAt: "2026-11-29T10:08:51.000Z" },
+	},
 };
 
 const EMPTY = { usage: {} };
@@ -46,6 +49,7 @@ export default async function () {
 		{ status: 200, body: FIXTURE },
 		{ status: 401, body: { error: { message: "invalid key" } } },
 		{ status: 200, body: EMPTY },
+		{ status: 200, body: RATE_LIMITED },
 	];
 	const requests = [];
 	globalThis.fetch = async (input, init) => {
@@ -65,7 +69,9 @@ export default async function () {
 	const statusLine = ok && formatCurrentModelQuota(ok, model);
 	const denied = await opencodeGoQuotaChecker.check(account, {} as never);
 	const empty = await opencodeGoQuotaChecker.check(account, {} as never);
+	const limited = await opencodeGoQuotaChecker.check(account, {} as never);
 	const missing = await opencodeGoQuotaChecker.check({ ...account, auth: undefined }, {} as never);
+	const limitedStatusLine = limited && formatCurrentModelQuota(limited, model);
 
 	writeFileSync(
 		process.env.MP_USAGE_OUT ?? "",
@@ -73,13 +79,14 @@ export default async function () {
 			requests,
 			snapshot,
 			malformed: parseOpenCodeUsageSnapshot(MALFORMED),
-			rateLimited: classifyOpenCodeQuotaKind(parseOpenCodeUsageSnapshot(RATE_LIMITED)),
 			classification: classifyOpenCodeQuotaKind(snapshot),
 			windows: listOpenCodeWindows(snapshot),
 			ok,
 			statusLine,
 			denied,
 			empty,
+			limited,
+			limitedStatusLine,
 			missing,
 		}),
 	);

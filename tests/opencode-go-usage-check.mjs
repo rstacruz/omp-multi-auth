@@ -78,8 +78,12 @@ try {
 	assert.equal("monthly" in data.malformed, false);
 	assert.equal(data.malformed.weekly.usedPercent, 54);
 
-	// A rate-limited window blocks even when its percent has room left.
-	assert.deepEqual(data.rateLimited, { kind: "blocked", score: 99 });
+	// A rate-limited window blocks even with room left, and it must be the one displayed.
+	assert.equal(data.limited.kind, "blocked");
+	assert.equal(data.limited.summary, "7d 60% | mo 99% | blocked");
+	assert.match(data.limitedStatusLine, /^mo 99% .* limited$/);
+	const monthlyDetail = data.limited.details.find((detail) => detail.startsWith("monthly window:"));
+	assert.match(monthlyDetail, /^monthly window: 99% left \(rate limited\), resets .+ \(anniversary anchor\)$/);
 
 	assert.equal(data.denied.kind, "error");
 	assert.equal(data.denied.summary, "Unauthorized - log in again");
