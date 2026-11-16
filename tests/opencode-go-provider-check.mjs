@@ -13,7 +13,7 @@ const agentDir = mkdtempSync(join(tmpdir(), "omp-multi-auth-opencode-go-"));
 // Mirrors omp's bundled opencode-go catalog
 const DIALECT_MODELS = ["beam-free", "grok-4.6", "claude-haiku-5-5", "gemini-4-argon"];
 const MODEL_COUNT = 55;
-const ACCOUNTS = ["opencode-go-1", "opencode-go-2"];
+const ACCOUNT_INDICES = [1, 2];
 
 try {
 
@@ -36,18 +36,15 @@ try {
 	const insert = db.prepare(
 		"INSERT INTO auth_credentials (provider, credential_type, data, identity_key) VALUES (?, 'api_key', ?, NULL)",
 	);
-	for (const provider of ACCOUNTS) {
-		insert.run(provider, JSON.stringify({ key: "test-key" }));
+	for (const index of ACCOUNT_INDICES) {
+		insert.run(`opencode-go-${index}`, JSON.stringify({ key: "test-key" }));
 	}
 	db.close();
 
 	writeFileSync(
 		join(agentDir, "multi-auth.json"),
 		JSON.stringify({
-			subscriptions: [
-				{ provider: "opencode-go", index: 1 },
-				{ provider: "opencode-go", index: 2 },
-			],
+			subscriptions: ACCOUNT_INDICES.map((index) => ({ provider: "opencode-go", index })),
 			presets: [],
 		}),
 	);
@@ -67,24 +64,18 @@ try {
 	const stdout = [];
 	const stderr = [];
 	child.stderr.on("data", (chunk) => stderr.push(chunk));
-	const waiters = [];
+	let resolveModels;
+	const modelsResponse = new Promise((resolve) => (resolveModels = resolve));
 	const lines = createInterface({ input: child.stdout });
 	lines.on("line", (line) => {
 		stdout.push(line);
 		try {
 			const event = JSON.parse(line);
-			for (let i = waiters.length - 1; i >= 0; i--) {
-				if (!waiters[i].matches(event)) continue;
-				waiters.splice(i, 1)[0].resolve(event);
-			}
+			if (event.id === "models") resolveModels(event);
 		} catch {}
 	});
-	const send = (request) => {
-		const response = new Promise((resolve) => waiters.push({ matches: (event) => event.id === request.id, resolve }));
-		child.stdin.write(`${JSON.stringify(request)}\n`);
-		return response;
-	};
-	const response = await send({ id: "models", type: "get_available_models" });
+	child.stdin.write('{"id":"models","type":"get_available_models"}\n');
+	const response = await modelsResponse;
 	child.stdin.end();
 	const exitCode = await new Promise((resolve) => child.once("close", resolve));
 	const rawStdout = stdout.join("\n");
@@ -94,7 +85,8 @@ try {
 	assert.equal(response.success, true);
 
 	const models = response.data.models;
-	for (const provider of ACCOUNTS) {
+	for (const index of ACCOUNT_INDICES) {
+		const provider = `opencode-go-${index}`;
 		const providerModels = models.filter((model) => model.provider === provider);
 		assert.equal(providerModels.length, MODEL_COUNT, `${provider} model count`);
 		assert.ok(providerModels.every((model) => model.api === "opencode-go-mp"), `${provider} routes through the wrapper`);
